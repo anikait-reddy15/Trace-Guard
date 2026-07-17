@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from app.database import init_sqlite_db
 from app.config import settings
 from app.api.endpoints import documents
+from app.api.endpoints import documents, selections
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,6 +23,7 @@ app = FastAPI(
 )
 
 app.include_router(documents.router) 
+app.include_router(selections.router)
 
 # Global exception handler to prevent raw stack traces from leaking
 @app.exception_handler(Exception)
