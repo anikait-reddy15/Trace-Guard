@@ -20,10 +20,12 @@ motor==3.3.2
 
 # LLM Orchestration & Validation
 google-genai==2.12.1
-openai==1.14.1
-instructor==1.0.0
+openai
+instructor
+anthropic
 
 # Development and Diagnostics
 pytest==8.1.1
 httpx==0.28.1
 python-dotenv==1.0.1
+python-multipart

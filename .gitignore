@@ -1,2 +1,22 @@
-.venv
+# Python environment and dependencies
+.venv/
+venv/
+env/
 __pycache__/
+*.pyc
+*.pyo
+
+# Sensitive credentials
+.env
+
+# Local database files
+*.db
+*.sqlite
+*.sqlite3
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Project-specific artifacts
+data/*.pdf

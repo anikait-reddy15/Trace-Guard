@@ -27,7 +27,7 @@ class QAEngine:
             ),
             mode=instructor.Mode.JSON
         )
-        self.model = "gemini-2.5-flash" # Fast, cheap, and excellent at structured data
+        self.model = "gemini-3.5-flash" # Fast, cheap, and excellent at structured data
 
     def _build_context_prompt(self, nodes: List[Dict[str, Any]]) -> str:
         """Formats the selected nodes into a readable context for the LLM."""

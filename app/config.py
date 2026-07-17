@@ -12,10 +12,13 @@ class Settings(BaseSettings):
     mongodb_url: str = "mongodb://localhost:27017"
     mongodb_db_name: str = "traceguard_generations"
     
-    # LLM Provider Key (Google or OpenAI)
+    # LLM Provider Keys
     llm_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
     
     class Config:
         env_file = ".env"
+        # Optional safeguard: tells Pydantic to ignore any other unmapped variables in the .env
+        extra = "ignore" 
 
 settings = Settings()
