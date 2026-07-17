@@ -4,8 +4,9 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.sql_models import Node, Selection, SelectionNode
+from app.models.sql_models import Selection, SelectionNode, Document, Node
 from app.schemas.selection_schemas import SelectionCreate, SelectionRead
+from app.database import get_db, get_mongo_collection   
 
 router = APIRouter(prefix="/selections", tags=["Selections"])
 
@@ -74,3 +75,87 @@ async def get_selection(
         raise HTTPException(status_code=404, detail="Selection not found.")
         
     return selection
+
+@router.get("/{selection_id}/staleness", response_model=dict)
+async def check_staleness(
+    selection_id: int,
+    db: AsyncSession = Depends(get_db),
+    mongo_collection = Depends(get_mongo_collection)
+):
+    """
+    Audits a previously generated test suite against the absolute latest
+    version of the document to determine if the test cases are STALE (outdated).
+    """
+    # 1. Fetch the frozen generation record from MongoDB
+    gen_doc = await mongo_collection.find_one({"selection_id": selection_id})
+    if not gen_doc:
+        raise HTTPException(status_code=404, detail="No generations found for this selection.")
+        
+    source_hashes = gen_doc.get("source_node_hashes", {})
+    if not source_hashes:
+        return {"overall_status": "UNKNOWN", "detail": "Legacy generation without hash tracking."}
+
+    # 2. Identify the absolute latest document in the system
+    latest_doc_stmt = select(Document).order_by(Document.created_at.desc()).limit(1)
+    latest_doc = (await db.execute(latest_doc_stmt)).scalars().first()
+    
+    if not latest_doc:
+        raise HTTPException(status_code=404, detail="No documents exist in the system.")
+
+    # 3. Fetch the original nodes from SQLite to know their headings and levels
+    original_node_ids = list(source_hashes.keys())
+    orig_nodes_stmt = select(Node).where(Node.id.in_(original_node_ids))
+    orig_nodes = {n.id: n for n in (await db.execute(orig_nodes_stmt)).scalars().all()}
+
+    audit_results = []
+    is_selection_stale = False
+
+    # 4. Cross-reference the frozen hashes against the live latest document
+    for orig_id, saved_hash in source_hashes.items():
+        orig_node = orig_nodes.get(orig_id)
+        if not orig_node:
+            continue
+            
+        # Look for this exact heading/level in the NEWEST document
+        counterpart_stmt = select(Node).where(
+            Node.document_id == latest_doc.id,
+            Node.heading == orig_node.heading,
+            Node.level == orig_node.level
+        )
+        counterpart_node = (await db.execute(counterpart_stmt)).scalars().first()
+        
+        node_audit = {
+            "original_node_id": orig_id,
+            "heading": orig_node.heading,
+            "saved_hash": saved_hash,
+            "latest_document_version": latest_doc.version_name,
+        }
+        
+        if not counterpart_node:
+            node_audit["status"] = "DELETED"
+            node_audit["is_stale"] = True
+            node_audit["reason"] = "The section heading no longer exists in the latest manual."
+        elif counterpart_node.content_hash != saved_hash:
+            node_audit["status"] = "MODIFIED"
+            node_audit["is_stale"] = True
+            node_audit["latest_hash"] = counterpart_node.content_hash
+            node_audit["latest_node_id"] = counterpart_node.id
+            node_audit["reason"] = "The body text of this section has been modified."
+        else:
+            node_audit["status"] = "UNCHANGED"
+            node_audit["is_stale"] = False
+            node_audit["latest_hash"] = counterpart_node.content_hash
+            node_audit["latest_node_id"] = counterpart_node.id
+            node_audit["reason"] = "Text is identical to generation time."
+            
+        if node_audit["is_stale"]:
+            is_selection_stale = True
+            
+        audit_results.append(node_audit)
+        
+    return {
+        "selection_id": selection_id,
+        "overall_status": "STALE" if is_selection_stale else "FRESH",
+        "audited_against_version": latest_doc.version_name,
+        "node_audits": audit_results
+    }   
