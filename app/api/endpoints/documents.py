@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.sql_models import Document, Node
 from app.schemas.document_schemas import DocumentRead
 from app.core.parser import DocumentParser
+from app.core.versioning import VersionEngine
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -145,3 +146,49 @@ async def get_document(document_id: int, db: AsyncSession = Depends(get_db)):
         "created_at": document.created_at,
         "nodes": tree
     }       
+    
+@router.post("/{previous_document_id}/reingest", response_model=DocumentRead)
+async def reingest_document(
+    previous_document_id: int,
+    new_version_name: str = Form(..., description="e.g., v2.0"),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Uploads a modified manual, diffs it against the previous version,
+    and flags nodes as 'unchanged', 'modified', or 'new'.
+    """
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+        
+    # Check if old doc exists
+    stmt = select(Document).where(Document.id == previous_document_id)
+    old_doc = (await db.execute(stmt)).scalars().first()
+    if not old_doc:
+        raise HTTPException(status_code=404, detail="Previous document ID not found.")
+
+    # Save new file
+    os.makedirs("data", exist_ok=True)
+    file_path = f"data/{file.filename}"
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        engine = VersionEngine(db)
+        new_doc = await engine.ingest_new_version(file_path, new_version_name, previous_document_id)
+        
+        # Fetch the newly created nodes to return the tree
+        nodes_stmt = select(Node).where(Node.document_id == new_doc.id).order_by(Node.level)
+        nodes_result = await db.execute(nodes_stmt)
+        tree = build_node_tree(nodes_result.scalars().all())
+
+        return {
+            "id": new_doc.id,
+            "version_name": new_doc.version_name,
+            "filename": new_doc.filename,
+            "created_at": new_doc.created_at,
+            "nodes": tree
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
